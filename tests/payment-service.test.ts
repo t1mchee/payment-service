@@ -54,25 +54,8 @@ describe("Customer Cache", () => {
   });
 });
 
-describe("Payment Service - Bug Demonstration", () => {
-  // This test documents the bug behavior.
-  // In a real codebase, this test would be added AFTER the bug is found.
-  test("documents the null-check bug in retry path", () => {
-    // The bug is in payment-service.ts, createCharge():
-    //
-    // On retry after Stripe failure:
-    //   const retryCustomer = await getCustomer(request.customerId);
-    //   const methodId = retryCustomer!.paymentMethodId;  // <-- BUG
-    //
-    // If retryCustomer is null (cache expired), this crashes with:
-    //   TypeError: Cannot read properties of null (reading 'paymentMethodId')
-    //
-    // Fix: Add null check:
-    //   if (!retryCustomer) {
-    //     throw new PaymentError(`Customer not found on retry: ${request.customerId}`);
-    //   }
-
-    // Verify the bug exists by checking the source
+describe("Payment Service - Null Check Verification", () => {
+  test("verifies the null-check fix is present in retry path", () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = require("fs");
     const source = fs.readFileSync(
@@ -80,12 +63,10 @@ describe("Payment Service - Bug Demonstration", () => {
       "utf-8"
     );
 
-    // The bug: using non-null assertion on potentially null value
-    expect(source).toContain("retryCustomer!.paymentMethodId");
+    // The fix: non-null assertion should no longer be used
+    expect(source).not.toContain("retryCustomer!.paymentMethodId");
 
-    // The missing null check
-    expect(source).not.toContain(
-      'if (!retryCustomer) { throw new PaymentError'
-    );
+    // The null check should now be present
+    expect(source).toContain("if (!retryCustomer)");
   });
 });
