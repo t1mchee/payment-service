@@ -1,10 +1,5 @@
 /**
  * In-memory customer cache with TTL.
- *
- * BUG (deliberate): TTL was reduced from 300s to 30s in a recent
- * "performance optimization" commit. During TTL refresh windows,
- * getCustomer() returns null. The retry handler in payment-service
- * does NOT null-check the result, causing a TypeError.
  */
 
 export interface Customer {
@@ -20,9 +15,8 @@ interface CacheEntry {
   expiresAt: number;
 }
 
-// BUG: TTL was reduced from 300_000 (5 min) to 30_000 (30s)
-// in commit "perf: reduce customer cache TTL for fresher data"
-const CACHE_TTL_MS = 30_000;
+// Restored TTL to 5 minutes to reduce cache miss frequency
+const CACHE_TTL_MS = 300_000;
 
 const cache = new Map<string, CacheEntry>();
 
