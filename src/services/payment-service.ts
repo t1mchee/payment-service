@@ -108,17 +108,19 @@ export async function createCharge(
       lastError = err as Error;
 
       if (attempt < maxRetries) {
-        // BUG: Re-fetch customer on retry without null check.
-        // If cache TTL expired between first fetch and retry,
-        // getCustomer() returns null during the refresh window.
-        // Accessing .paymentMethodId on null throws TypeError.
+        // Re-fetch customer on retry to get a fresh payment method
+        // in case the cache entry was refreshed.
         const retryCustomer = await getCustomer(
           request.customerId
         );
 
-        // MISSING: if (!retryCustomer) { throw ... }
-        // This line crashes when retryCustomer is null:
-        const methodId = retryCustomer!.paymentMethodId;
+        if (!retryCustomer) {
+          throw new PaymentError(
+            `Customer not found on retry: ${request.customerId}`
+          );
+        }
+
+        const methodId = retryCustomer.paymentMethodId;
 
         // Back off before retry
         await new Promise((resolve) =>
