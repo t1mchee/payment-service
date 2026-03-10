@@ -1,9 +1,9 @@
 /**
  * Payment processing service.
  *
- * Handles charge creation with retry logic. The retry path has a
- * deliberate bug: it calls getCustomer() without null-checking the
- * result before accessing .paymentMethodId.
+ * Handles charge creation with retry logic. The retry path re-fetches
+ * the customer and null-checks the result before accessing
+ * .paymentMethodId.
  */
 
 import { v4 as uuidv4 } from "uuid";
@@ -54,10 +54,9 @@ async function callStripeAPI(
  *
  * First attempt fetches the customer and validates the payment method.
  * On retry (after a transient Stripe failure), it re-fetches the
- * customer to get a fresh payment method — BUT does not null-check
- * the result. If the cache entry expired between the first call and
- * the retry, getCustomer() returns null during the refresh window,
- * causing: TypeError: Cannot read properties of null (reading 'paymentMethodId')
+ * customer to get a fresh payment method, with a null check to handle
+ * the case where the cache entry expired between the first call and
+ * the retry.
  */
 export async function createCharge(
   request: ChargeRequest
@@ -108,17 +107,20 @@ export async function createCharge(
       lastError = err as Error;
 
       if (attempt < maxRetries) {
-        // BUG: Re-fetch customer on retry without null check.
-        // If cache TTL expired between first fetch and retry,
-        // getCustomer() returns null during the refresh window.
-        // Accessing .paymentMethodId on null throws TypeError.
+        // Re-fetch customer on retry to get a fresh payment method.
+        // The cache entry may have expired between the first fetch and
+        // the retry, so getCustomer() can return null.
         const retryCustomer = await getCustomer(
           request.customerId
         );
 
-        // MISSING: if (!retryCustomer) { throw ... }
-        // This line crashes when retryCustomer is null:
-        const methodId = retryCustomer!.paymentMethodId;
+        if (!retryCustomer) {
+          throw new PaymentError(
+            `Customer not found on retry: ${request.customerId}`
+          );
+        }
+
+        const methodId = retryCustomer.paymentMethodId;
 
         // Back off before retry
         await new Promise((resolve) =>
