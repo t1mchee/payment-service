@@ -45,25 +45,25 @@ export async function processRefund(
   }
   chargeRefundStatus.set(chargeId, true);
 
-  // Simulate processing delay
   try {
+    // Simulate processing delay
     await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const refund: RefundRecord = {
+      refundId: `re_${uuidv4().slice(0, 12)}`,
+      chargeId,
+      amountCents,
+      status: "completed",
+      createdAt: new Date(),
+    };
+
+    refundStore.set(refund.refundId, refund);
+    return refund;
   } catch (err) {
     // Roll back the refund status on failure so the charge can be retried
     chargeRefundStatus.set(chargeId, false);
     throw err;
   }
-
-  const refund: RefundRecord = {
-    refundId: `re_${uuidv4().slice(0, 12)}`,
-    chargeId,
-    amountCents,
-    status: "completed",
-    createdAt: new Date(),
-  };
-
-  refundStore.set(refund.refundId, refund);
-  return refund;
 }
 
 /** Get refund by ID */
