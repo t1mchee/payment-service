@@ -1,10 +1,9 @@
 /**
  * Refund processing service.
  *
- * BUG: Race condition in concurrent refund processing.
- * When two refund requests arrive for the same charge simultaneously,
- * both can pass the "already refunded?" check before either marks
- * the charge as refunded, resulting in double refunds.
+ * Uses synchronous check-and-set to prevent concurrent refund requests
+ * from both passing the "already refunded?" check before either marks
+ * the charge as refunded.
  */
 
 import { v4 as uuidv4 } from "uuid";
@@ -25,9 +24,9 @@ const chargeRefundStatus = new Map<string, boolean>();
 /**
  * Process a refund for a charge.
  *
- * BUG: Time-of-check to time-of-use (TOCTOU) race condition.
  * The check for "already refunded" and the "mark as refunded" are
- * not atomic. Two concurrent requests can both pass the check.
+ * performed atomically (synchronously) before any async operation,
+ * preventing TOCTOU race conditions.
  */
 export async function processRefund(
   chargeId: string,
@@ -38,18 +37,22 @@ export async function processRefund(
     throw new PaymentError("Refund amount must be positive");
   }
 
-  // BUG: Race condition — check is not atomic with the update below
+  // Atomic check-and-set: mark as refunded immediately (synchronously)
+  // before any async work, so concurrent requests will see the flag.
   const alreadyRefunded = chargeRefundStatus.get(chargeId);
   if (alreadyRefunded) {
     throw new PaymentError(`Charge ${chargeId} has already been refunded`);
   }
-
-  // Simulate processing delay (this is where the race window opens)
-  await new Promise((resolve) => setTimeout(resolve, 50));
-
-  // BUG: Another request could have refunded while we were waiting
-  // This should re-check, but doesn't
   chargeRefundStatus.set(chargeId, true);
+
+  // Simulate processing delay
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } catch (err) {
+    // Roll back the refund status on failure so the charge can be retried
+    chargeRefundStatus.set(chargeId, false);
+    throw err;
+  }
 
   const refund: RefundRecord = {
     refundId: `re_${uuidv4().slice(0, 12)}`,
