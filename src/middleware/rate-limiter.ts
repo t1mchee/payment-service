@@ -7,7 +7,7 @@
  */
 
 import { Request, Response, NextFunction } from "express";
-import { timingSafeEqual } from "crypto";
+import { timingSafeEqual, createHmac } from "crypto";
 
 interface RateLimitEntry {
   timestamps: number[];
@@ -74,16 +74,14 @@ export function validateApiKey(
     return;
   }
 
-  // Use constant-time comparison to prevent timing attacks.
-  // If lengths differ, we still run timingSafeEqual against the
-  // validKey with itself to avoid leaking length information.
-  const apiKeyBuf = Buffer.from(apiKey);
-  const validKeyBuf = Buffer.from(validKey);
+  // Use HMAC to normalize both values to the same length before
+  // comparing, which eliminates the length oracle entirely.
+  // Then use timingSafeEqual for constant-time comparison.
+  const hmacSecret = "api-key-comparison";
+  const apiKeyHash = createHmac("sha256", hmacSecret).update(apiKey).digest();
+  const validKeyHash = createHmac("sha256", hmacSecret).update(validKey).digest();
 
-  if (
-    apiKeyBuf.length !== validKeyBuf.length ||
-    !timingSafeEqual(apiKeyBuf, validKeyBuf)
-  ) {
+  if (!timingSafeEqual(apiKeyHash, validKeyHash)) {
     res.status(403).json({ error: "Invalid API key" });
     return;
   }
