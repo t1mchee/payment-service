@@ -20,9 +20,9 @@ interface CacheEntry {
   expiresAt: number;
 }
 
-// BUG: TTL was reduced from 300_000 (5 min) to 30_000 (30s)
-// in commit "perf: reduce customer cache TTL for fresher data"
-const CACHE_TTL_MS = 30_000;
+// Restored to 5 min TTL — the 30s TTL caused cache expiry during
+// retry windows, contributing to null-reference errors.
+const CACHE_TTL_MS = 300_000;
 
 const cache = new Map<string, CacheEntry>();
 
