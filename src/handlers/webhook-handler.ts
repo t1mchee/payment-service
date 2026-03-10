@@ -20,8 +20,10 @@ export async function handleSendWebhook(
 
     const event = queueWebhook(type, payload || {});
 
-    // Fire-and-forget delivery (this is where the unhandled rejection bug lives)
-    deliverWebhook(url, event);
+    // Fire-and-forget delivery — catch any errors to prevent unhandled rejections
+    deliverWebhook(url, event).catch((err) => {
+      console.error(`Webhook ${event.id} initial delivery failed:`, err);
+    });
 
     res.status(202).json({
       webhookId: event.id,
