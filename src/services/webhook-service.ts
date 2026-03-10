@@ -2,7 +2,7 @@
  * Webhook delivery service.
  *
  * Delivers webhooks to customer endpoints with retry logic.
- * Failed deliveries are retried up to 3 times with exponential backoff.
+ * Failed deliveries are retried up to 2 times with exponential backoff.
  */
 
 import { AppError } from "../errors";
@@ -20,7 +20,7 @@ const webhookQueue: WebhookEvent[] = [];
 /**
  * Deliver a webhook to a customer's endpoint.
  *
- * Retries up to 3 times with exponential backoff on failure.
+ * Retries up to 2 times with exponential backoff on failure.
  */
 export async function deliverWebhook(
   url: string,
