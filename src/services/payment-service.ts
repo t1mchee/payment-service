@@ -54,10 +54,8 @@ async function callStripeAPI(
  *
  * First attempt fetches the customer and validates the payment method.
  * On retry (after a transient Stripe failure), it re-fetches the
- * customer to get a fresh payment method — BUT does not null-check
- * the result. If the cache entry expired between the first call and
- * the retry, getCustomer() returns null during the refresh window,
- * causing: TypeError: Cannot read properties of null (reading 'paymentMethodId')
+ * customer to get a fresh payment method with a null check to guard
+ * against cache TTL expiry between the first call and the retry.
  */
 export async function createCharge(
   request: ChargeRequest
@@ -108,17 +106,18 @@ export async function createCharge(
       lastError = err as Error;
 
       if (attempt < maxRetries) {
-        // BUG: Re-fetch customer on retry without null check.
-        // If cache TTL expired between first fetch and retry,
-        // getCustomer() returns null during the refresh window.
-        // Accessing .paymentMethodId on null throws TypeError.
+        // Re-fetch customer on retry to get a fresh payment method.
+        // Guard against cache TTL expiry returning null.
         const retryCustomer = await getCustomer(
           request.customerId
         );
 
-        // MISSING: if (!retryCustomer) { throw ... }
-        // This line crashes when retryCustomer is null:
-        const methodId = retryCustomer!.paymentMethodId;
+        if (!retryCustomer) {
+          throw new PaymentError(
+            `Customer not found on retry: ${request.customerId}`
+          );
+        }
+        const methodId = retryCustomer.paymentMethodId;
 
         // Back off before retry
         await new Promise((resolve) =>

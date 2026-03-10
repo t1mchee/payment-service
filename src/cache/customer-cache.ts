@@ -1,10 +1,9 @@
 /**
  * In-memory customer cache with TTL.
  *
- * BUG (deliberate): TTL was reduced from 300s to 30s in a recent
+ * NOTE: TTL was reduced from 300s to 30s in a recent
  * "performance optimization" commit. During TTL refresh windows,
- * getCustomer() returns null. The retry handler in payment-service
- * does NOT null-check the result, causing a TypeError.
+ * getCustomer() may return null. Callers must null-check the result.
  */
 
 export interface Customer {
