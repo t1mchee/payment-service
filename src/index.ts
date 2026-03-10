@@ -8,19 +8,46 @@
 
 import express from "express";
 import { handleCreateCharge, errorHandler } from "./handlers/charge-handler";
+import { handleCreateRefund } from "./handlers/refund-handler";
+import { handleSendWebhook } from "./handlers/webhook-handler";
+import { rateLimiter, validateApiKey } from "./middleware/rate-limiter";
+import { logAuditEvent, getAuditLogSize } from "./services/audit-logger";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(express.json());
 
+// Rate limiting on all routes
+app.use(rateLimiter);
+
 // Health check
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", service: "payment-service" });
+  res.json({
+    status: "ok",
+    service: "payment-service",
+    auditLogSize: getAuditLogSize(),
+  });
 });
 
-// Charge endpoint
-app.post("/charges", handleCreateCharge);
+// Payment endpoints (API key required)
+app.post("/charges", validateApiKey, handleCreateCharge);
+app.post("/refunds", validateApiKey, handleCreateRefund);
+
+// Webhook delivery
+app.post("/webhooks/deliver", handleSendWebhook);
+
+// Audit log middleware — logs every request
+app.use((req, _res, next) => {
+  logAuditEvent(
+    `${req.method} ${req.path}`,
+    req.headers["x-user-id"] as string || "anonymous",
+    req.path,
+    { query: req.query },
+    req.ip || "0.0.0.0"
+  );
+  next();
+});
 
 // Global error handler
 app.use(errorHandler);

@@ -1,0 +1,33 @@
+/**
+ * Express handler for the /webhooks endpoint.
+ */
+
+import { Request, Response, NextFunction } from "express";
+import { queueWebhook, deliverWebhook } from "../services/webhook-service";
+
+export async function handleSendWebhook(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { url, type, payload } = req.body;
+
+    if (!url || !type) {
+      res.status(400).json({ error: "Missing required fields: url, type" });
+      return;
+    }
+
+    const event = queueWebhook(type, payload || {});
+
+    // Fire-and-forget delivery (this is where the unhandled rejection bug lives)
+    deliverWebhook(url, event);
+
+    res.status(202).json({
+      webhookId: event.id,
+      status: "queued",
+    });
+  } catch (err) {
+    next(err);
+  }
+}
