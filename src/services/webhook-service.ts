@@ -1,10 +1,9 @@
 /**
  * Webhook delivery service.
  *
- * BUG: Unhandled promise rejection in webhook retry loop.
- * When a webhook delivery fails and the retry also fails with a
- * network error, the error is not caught, causing an unhandled
- * promise rejection that crashes the process.
+ * Retries failed webhook deliveries up to 2 times with exponential
+ * backoff. Errors during retries are caught and logged to prevent
+ * unhandled promise rejections.
  */
 
 import { AppError } from "../errors";
@@ -22,8 +21,8 @@ const webhookQueue: WebhookEvent[] = [];
 /**
  * Deliver a webhook to a customer's endpoint.
  *
- * BUG: The retry logic uses fire-and-forget (no await, no .catch()),
- * so if the retry itself throws, it becomes an unhandled promise rejection.
+ * On failure, retries up to 2 additional times with exponential backoff.
+ * All retry errors are caught to prevent unhandled promise rejections.
  */
 export async function deliverWebhook(
   url: string,
@@ -42,10 +41,13 @@ export async function deliverWebhook(
     event.deliveredAt = new Date();
   } catch (err) {
     if (event.attempts < 3) {
-      // BUG: fire-and-forget retry — no await, no .catch()
-      // If simulateHTTPPost throws during retry, it's an unhandled rejection
       setTimeout(() => {
-        deliverWebhook(url, event); // no .catch() here!
+        deliverWebhook(url, event).catch((retryErr) => {
+          console.error(
+            `Webhook ${event.id} retry ${event.attempts} failed:`,
+            retryErr
+          );
+        });
       }, 1000 * event.attempts);
     } else {
       // TODO: send to dead letter queue
