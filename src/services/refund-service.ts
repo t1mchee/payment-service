@@ -1,10 +1,8 @@
 /**
  * Refund processing service.
  *
- * BUG: Race condition in concurrent refund processing.
- * When two refund requests arrive for the same charge simultaneously,
- * both can pass the "already refunded?" check before either marks
- * the charge as refunded, resulting in double refunds.
+ * Uses a per-charge lock to prevent concurrent refund processing
+ * for the same charge, avoiding double-refund race conditions.
  */
 
 import { v4 as uuidv4 } from "uuid";
@@ -22,12 +20,34 @@ interface RefundRecord {
 const refundStore = new Map<string, RefundRecord>();
 const chargeRefundStatus = new Map<string, boolean>();
 
+// Per-charge lock map: ensures only one refund operation can proceed
+// at a time for a given charge, eliminating the TOCTOU race window.
+const chargeLocks = new Map<string, Promise<void>>();
+
+/**
+ * Acquire a per-charge lock. Returns a release function.
+ * If another refund is already in progress for this charge,
+ * the caller waits until the previous one completes.
+ */
+function acquireChargeLock(chargeId: string): Promise<() => void> {
+  const existing = chargeLocks.get(chargeId) ?? Promise.resolve();
+
+  let release: () => void;
+  const newLock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  chargeLocks.set(chargeId, newLock);
+
+  return existing.then(() => release!);
+}
+
 /**
  * Process a refund for a charge.
  *
- * BUG: Time-of-check to time-of-use (TOCTOU) race condition.
- * The check for "already refunded" and the "mark as refunded" are
- * not atomic. Two concurrent requests can both pass the check.
+ * Uses a per-charge lock so that the "already refunded?" check and
+ * the "mark as refunded" update are effectively atomic — concurrent
+ * requests for the same charge are serialized.
  */
 export async function processRefund(
   chargeId: string,
@@ -38,29 +58,36 @@ export async function processRefund(
     throw new PaymentError("Refund amount must be positive");
   }
 
-  // BUG: Race condition — check is not atomic with the update below
-  const alreadyRefunded = chargeRefundStatus.get(chargeId);
-  if (alreadyRefunded) {
-    throw new PaymentError(`Charge ${chargeId} has already been refunded`);
+  // Acquire a per-charge lock to prevent concurrent refund processing
+  const release = await acquireChargeLock(chargeId);
+
+  try {
+    // Check is now safe: we hold the lock for this chargeId
+    const alreadyRefunded = chargeRefundStatus.get(chargeId);
+    if (alreadyRefunded) {
+      throw new PaymentError(`Charge ${chargeId} has already been refunded`);
+    }
+
+    // Simulate processing delay
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Mark as refunded — still under the lock, so no other request
+    // can sneak past the check above
+    chargeRefundStatus.set(chargeId, true);
+
+    const refund: RefundRecord = {
+      refundId: `re_${uuidv4().slice(0, 12)}`,
+      chargeId,
+      amountCents,
+      status: "completed",
+      createdAt: new Date(),
+    };
+
+    refundStore.set(refund.refundId, refund);
+    return refund;
+  } finally {
+    release();
   }
-
-  // Simulate processing delay (this is where the race window opens)
-  await new Promise((resolve) => setTimeout(resolve, 50));
-
-  // BUG: Another request could have refunded while we were waiting
-  // This should re-check, but doesn't
-  chargeRefundStatus.set(chargeId, true);
-
-  const refund: RefundRecord = {
-    refundId: `re_${uuidv4().slice(0, 12)}`,
-    chargeId,
-    amountCents,
-    status: "completed",
-    createdAt: new Date(),
-  };
-
-  refundStore.set(refund.refundId, refund);
-  return refund;
 }
 
 /** Get refund by ID */
