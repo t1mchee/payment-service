@@ -1,10 +1,8 @@
 /**
  * Refund processing service.
  *
- * BUG: Race condition in concurrent refund processing.
- * When two refund requests arrive for the same charge simultaneously,
- * both can pass the "already refunded?" check before either marks
- * the charge as refunded, resulting in double refunds.
+ * Uses a synchronous in-progress lock to prevent concurrent refund
+ * processing for the same charge (TOCTOU protection).
  */
 
 import { v4 as uuidv4 } from "uuid";
@@ -22,12 +20,17 @@ interface RefundRecord {
 const refundStore = new Map<string, RefundRecord>();
 const chargeRefundStatus = new Map<string, boolean>();
 
+// Lock set to prevent concurrent refund processing for the same charge.
+// Checked and acquired synchronously in the same event loop tick,
+// so no two async flows can both acquire the lock for the same chargeId.
+const refundInProgress = new Set<string>();
+
 /**
  * Process a refund for a charge.
  *
- * BUG: Time-of-check to time-of-use (TOCTOU) race condition.
- * The check for "already refunded" and the "mark as refunded" are
- * not atomic. Two concurrent requests can both pass the check.
+ * The "already refunded" check and the in-progress lock acquisition
+ * are both synchronous, making them atomic within a single event-loop
+ * tick and eliminating the TOCTOU race window.
  */
 export async function processRefund(
   chargeId: string,
@@ -38,29 +41,40 @@ export async function processRefund(
     throw new PaymentError("Refund amount must be positive");
   }
 
-  // BUG: Race condition — check is not atomic with the update below
+  // Synchronous check-and-lock: both the "already refunded" check and the
+  // "in-progress" guard happen in the same event-loop tick, so concurrent
+  // callers cannot both pass before either acquires the lock.
   const alreadyRefunded = chargeRefundStatus.get(chargeId);
   if (alreadyRefunded) {
     throw new PaymentError(`Charge ${chargeId} has already been refunded`);
   }
 
-  // Simulate processing delay (this is where the race window opens)
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  if (refundInProgress.has(chargeId)) {
+    throw new PaymentError(`Refund already in progress for charge ${chargeId}`);
+  }
 
-  // BUG: Another request could have refunded while we were waiting
-  // This should re-check, but doesn't
-  chargeRefundStatus.set(chargeId, true);
+  // Acquire the lock synchronously — still in the same tick as the checks above
+  refundInProgress.add(chargeId);
 
-  const refund: RefundRecord = {
-    refundId: `re_${uuidv4().slice(0, 12)}`,
-    chargeId,
-    amountCents,
-    status: "completed",
-    createdAt: new Date(),
-  };
+  try {
+    // Simulate processing delay
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
-  refundStore.set(refund.refundId, refund);
-  return refund;
+    chargeRefundStatus.set(chargeId, true);
+
+    const refund: RefundRecord = {
+      refundId: `re_${uuidv4().slice(0, 12)}`,
+      chargeId,
+      amountCents,
+      status: "completed",
+      createdAt: new Date(),
+    };
+
+    refundStore.set(refund.refundId, refund);
+    return refund;
+  } finally {
+    refundInProgress.delete(chargeId);
+  }
 }
 
 /** Get refund by ID */
