@@ -21,6 +21,18 @@ app.use(express.json());
 // Rate limiting on all routes
 app.use(rateLimiter);
 
+// Audit log middleware — logs every request (must be before routes)
+app.use((req, _res, next) => {
+  logAuditEvent(
+    `${req.method} ${req.path}`,
+    req.headers["x-user-id"] as string || "anonymous",
+    req.path,
+    { query: req.query },
+    req.ip || "0.0.0.0"
+  );
+  next();
+});
+
 // Health check
 app.get("/health", (_req, res) => {
   res.json({
@@ -36,18 +48,6 @@ app.post("/refunds", validateApiKey, handleCreateRefund);
 
 // Webhook delivery
 app.post("/webhooks/deliver", handleSendWebhook);
-
-// Audit log middleware — logs every request
-app.use((req, _res, next) => {
-  logAuditEvent(
-    `${req.method} ${req.path}`,
-    req.headers["x-user-id"] as string || "anonymous",
-    req.path,
-    { query: req.query },
-    req.ip || "0.0.0.0"
-  );
-  next();
-});
 
 // Global error handler
 app.use(errorHandler);

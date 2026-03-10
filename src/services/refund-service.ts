@@ -1,10 +1,8 @@
 /**
  * Refund processing service.
  *
- * BUG: Race condition in concurrent refund processing.
- * When two refund requests arrive for the same charge simultaneously,
- * both can pass the "already refunded?" check before either marks
- * the charge as refunded, resulting in double refunds.
+ * Uses a lock set to prevent concurrent refund processing for the
+ * same charge, eliminating the TOCTOU race condition.
  */
 
 import { v4 as uuidv4 } from "uuid";
@@ -22,12 +20,14 @@ interface RefundRecord {
 const refundStore = new Map<string, RefundRecord>();
 const chargeRefundStatus = new Map<string, boolean>();
 
+// Lock set to prevent concurrent refund processing for the same charge
+const processingLocks = new Set<string>();
+
 /**
  * Process a refund for a charge.
  *
- * BUG: Time-of-check to time-of-use (TOCTOU) race condition.
- * The check for "already refunded" and the "mark as refunded" are
- * not atomic. Two concurrent requests can both pass the check.
+ * Uses a lock set to make the check-and-mark operation atomic,
+ * preventing double refunds from concurrent requests.
  */
 export async function processRefund(
   chargeId: string,
@@ -38,29 +38,43 @@ export async function processRefund(
     throw new PaymentError("Refund amount must be positive");
   }
 
-  // BUG: Race condition — check is not atomic with the update below
+  // Atomically check if already refunded
   const alreadyRefunded = chargeRefundStatus.get(chargeId);
   if (alreadyRefunded) {
     throw new PaymentError(`Charge ${chargeId} has already been refunded`);
   }
 
-  // Simulate processing delay (this is where the race window opens)
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  // Acquire a processing lock to prevent concurrent refunds for the same charge
+  if (processingLocks.has(chargeId)) {
+    throw new PaymentError(`Charge ${chargeId} is already being refunded`);
+  }
+  processingLocks.add(chargeId);
 
-  // BUG: Another request could have refunded while we were waiting
-  // This should re-check, but doesn't
-  chargeRefundStatus.set(chargeId, true);
+  try {
+    // Simulate processing delay
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
-  const refund: RefundRecord = {
-    refundId: `re_${uuidv4().slice(0, 12)}`,
-    chargeId,
-    amountCents,
-    status: "completed",
-    createdAt: new Date(),
-  };
+    // Re-check after async work in case another request completed
+    if (chargeRefundStatus.get(chargeId)) {
+      throw new PaymentError(`Charge ${chargeId} has already been refunded`);
+    }
 
-  refundStore.set(refund.refundId, refund);
-  return refund;
+    // Mark as refunded
+    chargeRefundStatus.set(chargeId, true);
+
+    const refund: RefundRecord = {
+      refundId: `re_${uuidv4().slice(0, 12)}`,
+      chargeId,
+      amountCents,
+      status: "completed",
+      createdAt: new Date(),
+    };
+
+    refundStore.set(refund.refundId, refund);
+    return refund;
+  } finally {
+    processingLocks.delete(chargeId);
+  }
 }
 
 /** Get refund by ID */

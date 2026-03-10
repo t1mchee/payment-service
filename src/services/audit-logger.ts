@@ -1,12 +1,8 @@
 /**
  * Audit logging service for payment events.
  *
- * BUG: Memory leak — audit log entries are appended to an unbounded
- * in-memory array. In production with high throughput, this grows
- * indefinitely and eventually causes an OOMKilled.
- *
- * BUG: SQL injection — the buildQuery function interpolates user
- * input directly into SQL strings without parameterization.
+ * Uses a bounded in-memory buffer with eviction to prevent OOM,
+ * and parameterized queries to prevent SQL injection.
  */
 
 interface AuditEntry {
@@ -18,13 +14,12 @@ interface AuditEntry {
   ipAddress: string;
 }
 
-// BUG: Memory leak — this array grows unbounded, never trimmed
-// In production with ~1000 events/sec, this causes OOMKilled within hours
+const MAX_AUDIT_ENTRIES = 10_000;
 const auditLog: AuditEntry[] = [];
 
 /**
  * Log an audit event.
- * BUG: Never evicts old entries — unbounded memory growth
+ * Evicts oldest entries when the buffer exceeds MAX_AUDIT_ENTRIES.
  */
 export function logAuditEvent(
   action: string,
@@ -41,27 +36,32 @@ export function logAuditEvent(
     metadata,
     ipAddress,
   });
-  // BUG: Should have maxSize check and eviction, e.g.:
-  // if (auditLog.length > MAX_ENTRIES) auditLog.shift();
+
+  // Evict oldest entries to prevent unbounded memory growth
+  while (auditLog.length > MAX_AUDIT_ENTRIES) {
+    auditLog.shift();
+  }
 }
 
 /**
  * Query audit logs for a user.
  *
- * BUG: SQL injection — userId is interpolated directly into the query
- * string. An attacker could pass: userId = "'; DROP TABLE audit; --"
+ * Returns a parameterized query object to prevent SQL injection.
  */
-export function buildAuditQuery(userId: string, fromDate?: string): string {
-  // BUG: Direct string interpolation — SQL injection vulnerability
-  let query = `SELECT * FROM audit_log WHERE user_id = '${userId}'`;
+export function buildAuditQuery(
+  userId: string,
+  fromDate?: string
+): { text: string; params: string[] } {
+  const params: string[] = [userId];
+  let query = "SELECT * FROM audit_log WHERE user_id = $1";
 
   if (fromDate) {
-    // BUG: Also injectable via fromDate parameter
-    query += ` AND timestamp >= '${fromDate}'`;
+    params.push(fromDate);
+    query += ` AND timestamp >= $${params.length}`;
   }
 
   query += " ORDER BY timestamp DESC LIMIT 100";
-  return query;
+  return { text: query, params };
 }
 
 /** Get current audit log size (for monitoring) */
