@@ -1,10 +1,8 @@
 /**
  * Refund processing service.
  *
- * BUG: Race condition in concurrent refund processing.
- * When two refund requests arrive for the same charge simultaneously,
- * both can pass the "already refunded?" check before either marks
- * the charge as refunded, resulting in double refunds.
+ * Processes refunds for charges with protection against concurrent
+ * duplicate refund requests using atomic check-and-set.
  */
 
 import { v4 as uuidv4 } from "uuid";
@@ -25,9 +23,10 @@ const chargeRefundStatus = new Map<string, boolean>();
 /**
  * Process a refund for a charge.
  *
- * BUG: Time-of-check to time-of-use (TOCTOU) race condition.
- * The check for "already refunded" and the "mark as refunded" are
- * not atomic. Two concurrent requests can both pass the check.
+ * Uses atomic (synchronous) check-and-set on chargeRefundStatus to
+ * prevent concurrent requests from both passing the duplicate check.
+ * The flag is set immediately before any async work, and rolled back
+ * if processing fails.
  */
 export async function processRefund(
   chargeId: string,
@@ -38,29 +37,33 @@ export async function processRefund(
     throw new PaymentError("Refund amount must be positive");
   }
 
-  // BUG: Race condition — check is not atomic with the update below
+  // Atomic check-and-set: both the check and the flag update are
+  // synchronous, so no other async request can interleave between them.
   const alreadyRefunded = chargeRefundStatus.get(chargeId);
   if (alreadyRefunded) {
     throw new PaymentError(`Charge ${chargeId} has already been refunded`);
   }
-
-  // Simulate processing delay (this is where the race window opens)
-  await new Promise((resolve) => setTimeout(resolve, 50));
-
-  // BUG: Another request could have refunded while we were waiting
-  // This should re-check, but doesn't
   chargeRefundStatus.set(chargeId, true);
 
-  const refund: RefundRecord = {
-    refundId: `re_${uuidv4().slice(0, 12)}`,
-    chargeId,
-    amountCents,
-    status: "completed",
-    createdAt: new Date(),
-  };
+  try {
+    // Simulate processing delay
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
-  refundStore.set(refund.refundId, refund);
-  return refund;
+    const refund: RefundRecord = {
+      refundId: `re_${uuidv4().slice(0, 12)}`,
+      chargeId,
+      amountCents,
+      status: "completed",
+      createdAt: new Date(),
+    };
+
+    refundStore.set(refund.refundId, refund);
+    return refund;
+  } catch (err) {
+    // Roll back the refund flag so the charge can be retried
+    chargeRefundStatus.set(chargeId, false);
+    throw err;
+  }
 }
 
 /** Get refund by ID */
