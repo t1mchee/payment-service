@@ -4,9 +4,6 @@
  * BUG: Memory leak — audit log entries are appended to an unbounded
  * in-memory array. In production with high throughput, this grows
  * indefinitely and eventually causes an OOMKilled.
- *
- * BUG: SQL injection — the buildQuery function interpolates user
- * input directly into SQL strings without parameterization.
  */
 
 interface AuditEntry {
@@ -45,23 +42,29 @@ export function logAuditEvent(
   // if (auditLog.length > MAX_ENTRIES) auditLog.shift();
 }
 
+export interface ParameterizedQuery {
+  text: string;
+  params: string[];
+}
+
 /**
  * Query audit logs for a user.
  *
- * BUG: SQL injection — userId is interpolated directly into the query
- * string. An attacker could pass: userId = "'; DROP TABLE audit; --"
+ * Returns a parameterized query with placeholder values to prevent
+ * SQL injection. Callers must pass `query.params` as bind parameters
+ * when executing the query against the database.
  */
-export function buildAuditQuery(userId: string, fromDate?: string): string {
-  // BUG: Direct string interpolation — SQL injection vulnerability
-  let query = `SELECT * FROM audit_log WHERE user_id = '${userId}'`;
+export function buildAuditQuery(userId: string, fromDate?: string): ParameterizedQuery {
+  const params: string[] = [userId];
+  let text = `SELECT * FROM audit_log WHERE user_id = $1`;
 
   if (fromDate) {
-    // BUG: Also injectable via fromDate parameter
-    query += ` AND timestamp >= '${fromDate}'`;
+    params.push(fromDate);
+    text += ` AND timestamp >= $${params.length}`;
   }
 
-  query += " ORDER BY timestamp DESC LIMIT 100";
-  return query;
+  text += " ORDER BY timestamp DESC LIMIT 100";
+  return { text, params };
 }
 
 /** Get current audit log size (for monitoring) */
