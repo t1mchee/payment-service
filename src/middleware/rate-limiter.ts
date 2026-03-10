@@ -4,13 +4,10 @@
  * BUG: The sliding window implementation has an off-by-one error
  * that allows one extra request per window, and the cleanup logic
  * never removes expired entries, causing slow memory growth.
- *
- * BUG: Timing attack vulnerability — the comparison of API keys
- * uses standard string equality instead of constant-time comparison,
- * leaking key length information via response timing.
  */
 
 import { Request, Response, NextFunction } from "express";
+import { timingSafeEqual } from "crypto";
 
 interface RateLimitEntry {
   timestamps: number[];
@@ -61,9 +58,8 @@ export function rateLimiter(
 /**
  * Validate API key from request header.
  *
- * BUG: Timing attack — uses !== for key comparison.
- * An attacker can measure response time to determine how many
- * characters of their guess match the real key.
+ * Uses crypto.timingSafeEqual() for constant-time comparison
+ * to prevent timing attacks that could leak key information.
  */
 export function validateApiKey(
   req: Request,
@@ -78,9 +74,19 @@ export function validateApiKey(
     return;
   }
 
-  // BUG: Timing attack — standard string comparison leaks information
-  // Should use crypto.timingSafeEqual() instead
-  if (apiKey !== validKey) {
+  // Use constant-time comparison to prevent timing attacks.
+  // First check lengths to avoid timingSafeEqual throwing on mismatched lengths,
+  // but pad both to the same length so the length check itself doesn't leak info.
+  const apiKeyBuf = Buffer.from(apiKey);
+  const validKeyBuf = Buffer.from(validKey);
+  const isLengthMatch = apiKeyBuf.length === validKeyBuf.length;
+
+  // If lengths differ, compare validKey against itself to keep constant time,
+  // but still reject the key.
+  const a = isLengthMatch ? apiKeyBuf : validKeyBuf;
+  const b = validKeyBuf;
+
+  if (!timingSafeEqual(a, b) || !isLengthMatch) {
     res.status(403).json({ error: "Invalid API key" });
     return;
   }
