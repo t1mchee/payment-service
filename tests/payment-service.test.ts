@@ -54,25 +54,13 @@ describe("Customer Cache", () => {
   });
 });
 
-describe("Payment Service - Bug Demonstration", () => {
-  // This test documents the bug behavior.
-  // In a real codebase, this test would be added AFTER the bug is found.
-  test("documents the null-check bug in retry path", () => {
-    // The bug is in payment-service.ts, createCharge():
-    //
-    // On retry after Stripe failure:
-    //   const retryCustomer = await getCustomer(request.customerId);
-    //   const methodId = retryCustomer!.paymentMethodId;  // <-- BUG
-    //
-    // If retryCustomer is null (cache expired), this crashes with:
-    //   TypeError: Cannot read properties of null (reading 'paymentMethodId')
-    //
-    // Fix: Add null check:
-    //   if (!retryCustomer) {
-    //     throw new PaymentError(`Customer not found on retry: ${request.customerId}`);
-    //   }
+describe("Payment Service - Null Check Fix Verification", () => {
+  test("verifies the null-check fix is present in retry path", () => {
+    // The fix ensures that the retry path in createCharge() properly
+    // null-checks the re-fetched customer before accessing .paymentMethodId.
+    // Previously, the code used retryCustomer!.paymentMethodId which crashed
+    // with TypeError when the cache entry expired during the retry window.
 
-    // Verify the bug exists by checking the source
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = require("fs");
     const source = fs.readFileSync(
@@ -80,12 +68,10 @@ describe("Payment Service - Bug Demonstration", () => {
       "utf-8"
     );
 
-    // The bug: using non-null assertion on potentially null value
-    expect(source).toContain("retryCustomer!.paymentMethodId");
+    // The fix: no more non-null assertion on potentially null value
+    expect(source).not.toContain("retryCustomer!.paymentMethodId");
 
-    // The missing null check
-    expect(source).not.toContain(
-      'if (!retryCustomer) { throw new PaymentError'
-    );
+    // The null check should now be present
+    expect(source).toContain("if (!retryCustomer)");
   });
 });
