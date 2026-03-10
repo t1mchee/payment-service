@@ -1,10 +1,9 @@
 /**
  * Refund processing service.
  *
- * BUG: Race condition in concurrent refund processing.
- * When two refund requests arrive for the same charge simultaneously,
- * both can pass the "already refunded?" check before either marks
- * the charge as refunded, resulting in double refunds.
+ * Uses a synchronous in-flight lock to prevent concurrent refund
+ * requests for the same charge from both passing the "already refunded?"
+ * check before either marks the charge as refunded.
  */
 
 import { v4 as uuidv4 } from "uuid";
@@ -22,12 +21,18 @@ interface RefundRecord {
 const refundStore = new Map<string, RefundRecord>();
 const chargeRefundStatus = new Map<string, boolean>();
 
+// In-flight lock: tracks charges currently being processed for refund.
+// This prevents the TOCTOU race by atomically checking and marking a
+// charge as "in-flight" before any async work begins.
+const refundsInFlight = new Set<string>();
+
 /**
  * Process a refund for a charge.
  *
- * BUG: Time-of-check to time-of-use (TOCTOU) race condition.
- * The check for "already refunded" and the "mark as refunded" are
- * not atomic. Two concurrent requests can both pass the check.
+ * The check-and-lock is performed synchronously (before any await)
+ * so that concurrent calls for the same chargeId cannot both proceed
+ * past the guard — Node.js runs synchronous code to completion within
+ * a single microtask, eliminating the race window.
  */
 export async function processRefund(
   chargeId: string,
@@ -38,29 +43,40 @@ export async function processRefund(
     throw new PaymentError("Refund amount must be positive");
   }
 
-  // BUG: Race condition — check is not atomic with the update below
+  // Check if already refunded (completed)
   const alreadyRefunded = chargeRefundStatus.get(chargeId);
   if (alreadyRefunded) {
     throw new PaymentError(`Charge ${chargeId} has already been refunded`);
   }
 
-  // Simulate processing delay (this is where the race window opens)
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  // Atomically check-and-lock: if another request is already in-flight
+  // for this charge, reject the duplicate immediately.
+  if (refundsInFlight.has(chargeId)) {
+    throw new PaymentError(`Charge ${chargeId} has already been refunded`);
+  }
+  refundsInFlight.add(chargeId);
 
-  // BUG: Another request could have refunded while we were waiting
-  // This should re-check, but doesn't
-  chargeRefundStatus.set(chargeId, true);
+  try {
+    // Simulate processing delay
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
-  const refund: RefundRecord = {
-    refundId: `re_${uuidv4().slice(0, 12)}`,
-    chargeId,
-    amountCents,
-    status: "completed",
-    createdAt: new Date(),
-  };
+    // Mark charge as permanently refunded
+    chargeRefundStatus.set(chargeId, true);
 
-  refundStore.set(refund.refundId, refund);
-  return refund;
+    const refund: RefundRecord = {
+      refundId: `re_${uuidv4().slice(0, 12)}`,
+      chargeId,
+      amountCents,
+      status: "completed",
+      createdAt: new Date(),
+    };
+
+    refundStore.set(refund.refundId, refund);
+    return refund;
+  } finally {
+    // Release the in-flight lock whether we succeeded or failed
+    refundsInFlight.delete(chargeId);
+  }
 }
 
 /** Get refund by ID */
