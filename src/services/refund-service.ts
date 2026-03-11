@@ -47,8 +47,11 @@ export async function processRefund(
   // Simulate processing delay (this is where the race window opens)
   await new Promise((resolve) => setTimeout(resolve, 50));
 
-  // BUG: Another request could have refunded while we were waiting
-  // This should re-check, but doesn't
+  // Re-check after async delay to prevent double refunds
+  const alreadyRefundedAfterWait = chargeRefundStatus.get(chargeId);
+  if (alreadyRefundedAfterWait) {
+    throw new PaymentError(`Charge ${chargeId} has already been refunded`);
+  }
   chargeRefundStatus.set(chargeId, true);
 
   const refund: RefundRecord = {
