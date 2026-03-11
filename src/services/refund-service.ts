@@ -38,18 +38,17 @@ export async function processRefund(
     throw new PaymentError("Refund amount must be positive");
   }
 
-  // BUG: Race condition — check is not atomic with the update below
   const alreadyRefunded = chargeRefundStatus.get(chargeId);
   if (alreadyRefunded) {
     throw new PaymentError(`Charge ${chargeId} has already been refunded`);
   }
 
-  // Simulate processing delay (this is where the race window opens)
-  await new Promise((resolve) => setTimeout(resolve, 50));
-
-  // BUG: Another request could have refunded while we were waiting
-  // This should re-check, but doesn't
+  // Mark as refunded immediately to prevent concurrent requests from
+  // passing the check above while we are processing.
   chargeRefundStatus.set(chargeId, true);
+
+  // Simulate processing delay
+  await new Promise((resolve) => setTimeout(resolve, 50));
 
   const refund: RefundRecord = {
     refundId: `re_${uuidv4().slice(0, 12)}`,
