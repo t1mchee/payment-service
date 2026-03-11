@@ -54,25 +54,21 @@ describe("Customer Cache", () => {
   });
 });
 
-describe("Payment Service - Bug Demonstration", () => {
-  // This test documents the bug behavior.
-  // In a real codebase, this test would be added AFTER the bug is found.
-  test("documents the null-check bug in retry path", () => {
-    // The bug is in payment-service.ts, createCharge():
+describe("Payment Service - Bug Fix Verification", () => {
+  // This test verifies the null-check bug in the retry path has been fixed.
+  test("verifies the null-check bug in retry path is fixed", () => {
+    // The bug was in payment-service.ts, createCharge():
     //
     // On retry after Stripe failure:
     //   const retryCustomer = await getCustomer(request.customerId);
     //   const methodId = retryCustomer!.paymentMethodId;  // <-- BUG
     //
-    // If retryCustomer is null (cache expired), this crashes with:
+    // If retryCustomer is null (cache expired), this crashed with:
     //   TypeError: Cannot read properties of null (reading 'paymentMethodId')
     //
-    // Fix: Add null check:
-    //   if (!retryCustomer) {
-    //     throw new PaymentError(`Customer not found on retry: ${request.customerId}`);
-    //   }
+    // Fix: Added null check before accessing retryCustomer.paymentMethodId
 
-    // Verify the bug exists by checking the source
+    // Verify the fix by checking the source
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = require("fs");
     const source = fs.readFileSync(
@@ -80,12 +76,10 @@ describe("Payment Service - Bug Demonstration", () => {
       "utf-8"
     );
 
-    // The bug: using non-null assertion on potentially null value
-    expect(source).toContain("retryCustomer!.paymentMethodId");
+    // The non-null assertion bug should no longer be present
+    expect(source).not.toContain("retryCustomer!.paymentMethodId");
 
-    // The missing null check
-    expect(source).not.toContain(
-      'if (!retryCustomer) { throw new PaymentError'
-    );
+    // A null check for retryCustomer should now exist
+    expect(source).toContain("if (!retryCustomer)");
   });
 });

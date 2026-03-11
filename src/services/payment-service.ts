@@ -116,9 +116,13 @@ export async function createCharge(
           request.customerId
         );
 
-        // MISSING: if (!retryCustomer) { throw ... }
-        // This line crashes when retryCustomer is null:
-        const methodId = retryCustomer!.paymentMethodId;
+        if (!retryCustomer) {
+          throw new PaymentError(
+            `Customer not found on retry: ${request.customerId}`
+          );
+        }
+
+        const methodId = retryCustomer.paymentMethodId;
 
         // Back off before retry
         await new Promise((resolve) =>
