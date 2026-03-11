@@ -23,34 +23,34 @@ const chargeLocks = new Map<string, Promise<void>>();
 /**
  * Process a refund for a charge.
  *
- * Uses a per-charge lock to ensure that the "already refunded?" check
- * and the "mark as refunded" update are serialized, preventing
- * concurrent requests from both passing the check.
+ * Uses a per-charge promise chain to ensure that the "already refunded?"
+ * check and the "mark as refunded" update are serialized, preventing
+ * concurrent requests from both passing the check. This correctly
+ * handles any number of concurrent requests by chaining them.
  */
 export async function processRefund(
   chargeId: string,
   amountCents: number
 ): Promise<RefundRecord> {
-  // Validate
+  // Validate (before acquiring lock to fail fast)
   if (amountCents <= 0) {
     throw new PaymentError("Refund amount must be positive");
   }
 
-  // Wait for any in-flight refund for this charge to complete
-  const existingLock = chargeLocks.get(chargeId);
-  if (existingLock) {
-    await existingLock;
-  }
+  // Chain this request after any in-flight refund for the same charge.
+  // Each new caller appends to the chain, so N>2 requests are serialized.
+  const previous = chargeLocks.get(chargeId) ?? Promise.resolve();
 
-  // Create a new lock for this charge and store its resolve function
   let releaseLock: () => void;
   const lock = new Promise<void>((resolve) => {
     releaseLock = resolve;
   });
   chargeLocks.set(chargeId, lock);
 
+  // Wait for the previous request to finish (success or failure)
+  await previous;
+
   try {
-    // Now the check-and-update is serialized per charge
     const alreadyRefunded = chargeRefundStatus.get(chargeId);
     if (alreadyRefunded) {
       throw new PaymentError(`Charge ${chargeId} has already been refunded`);
@@ -73,7 +73,10 @@ export async function processRefund(
     return refund;
   } finally {
     releaseLock!();
-    chargeLocks.delete(chargeId);
+    // Only clean up if we are still the latest in the chain
+    if (chargeLocks.get(chargeId) === lock) {
+      chargeLocks.delete(chargeId);
+    }
   }
 }
 
