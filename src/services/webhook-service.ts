@@ -19,6 +19,14 @@ interface WebhookEvent {
 
 const webhookQueue: WebhookEvent[] = [];
 
+/** Remove an event from the queue once it has been delivered or permanently failed. */
+function removeFromQueue(event: WebhookEvent): void {
+  const idx = webhookQueue.indexOf(event);
+  if (idx !== -1) {
+    webhookQueue.splice(idx, 1);
+  }
+}
+
 /**
  * Deliver a webhook to a customer's endpoint.
  *
@@ -40,6 +48,7 @@ export async function deliverWebhook(
     }
 
     event.deliveredAt = new Date();
+    removeFromQueue(event);
   } catch (err) {
     if (event.attempts < 3) {
       // BUG: fire-and-forget retry — no await, no .catch()
@@ -50,6 +59,7 @@ export async function deliverWebhook(
     } else {
       // TODO: send to dead letter queue
       console.error(`Webhook ${event.id} failed after ${event.attempts} attempts`);
+      removeFromQueue(event);
     }
   }
 }
