@@ -40,6 +40,7 @@ export async function deliverWebhook(
     }
 
     event.deliveredAt = new Date();
+    removeFromQueue(event);
   } catch (err) {
     if (event.attempts < 3) {
       // BUG: fire-and-forget retry — no await, no .catch()
@@ -50,6 +51,7 @@ export async function deliverWebhook(
     } else {
       // TODO: send to dead letter queue
       console.error(`Webhook ${event.id} failed after ${event.attempts} attempts`);
+      removeFromQueue(event);
     }
   }
 }
@@ -69,6 +71,14 @@ export function queueWebhook(
   };
   webhookQueue.push(event);
   return event;
+}
+
+/** Remove a delivered or permanently-failed event from the queue. */
+function removeFromQueue(event: WebhookEvent): void {
+  const idx = webhookQueue.indexOf(event);
+  if (idx !== -1) {
+    webhookQueue.splice(idx, 1);
+  }
 }
 
 /** Simulate an HTTP POST — fails ~40% of the time */
