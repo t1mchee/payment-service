@@ -42,10 +42,11 @@ export async function deliverWebhook(
     event.deliveredAt = new Date();
   } catch (err) {
     if (event.attempts < 3) {
-      // BUG: fire-and-forget retry — no await, no .catch()
-      // If simulateHTTPPost throws during retry, it's an unhandled rejection
+      // Retry with proper error handling to avoid unhandled promise rejections
       setTimeout(() => {
-        deliverWebhook(url, event); // no .catch() here!
+        deliverWebhook(url, event).catch((retryErr) => {
+          console.error(`Webhook ${event.id} retry failed:`, retryErr);
+        });
       }, 1000 * event.attempts);
     } else {
       // TODO: send to dead letter queue
