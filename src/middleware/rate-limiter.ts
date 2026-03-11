@@ -11,6 +11,7 @@
  */
 
 import { Request, Response, NextFunction } from "express";
+import { timingSafeEqual } from "crypto";
 
 interface RateLimitEntry {
   timestamps: number[];
@@ -61,9 +62,7 @@ export function rateLimiter(
 /**
  * Validate API key from request header.
  *
- * BUG: Timing attack — uses !== for key comparison.
- * An attacker can measure response time to determine how many
- * characters of their guess match the real key.
+ * Uses constant-time comparison to prevent timing attacks.
  */
 export function validateApiKey(
   req: Request,
@@ -78,9 +77,13 @@ export function validateApiKey(
     return;
   }
 
-  // BUG: Timing attack — standard string comparison leaks information
-  // Should use crypto.timingSafeEqual() instead
-  if (apiKey !== validKey) {
+  // Use constant-time comparison to prevent timing attacks.
+  // First check length equality (timingSafeEqual requires equal-length buffers),
+  // then compare contents in constant time.
+  const apiKeyBuf = Buffer.from(apiKey);
+  const validKeyBuf = Buffer.from(validKey);
+
+  if (apiKeyBuf.length !== validKeyBuf.length || !timingSafeEqual(apiKeyBuf, validKeyBuf)) {
     res.status(403).json({ error: "Invalid API key" });
     return;
   }
