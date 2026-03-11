@@ -1,10 +1,5 @@
 /**
  * Refund processing service.
- *
- * BUG: Race condition in concurrent refund processing.
- * When two refund requests arrive for the same charge simultaneously,
- * both can pass the "already refunded?" check before either marks
- * the charge as refunded, resulting in double refunds.
  */
 
 import { v4 as uuidv4 } from "uuid";
@@ -25,9 +20,8 @@ const chargeRefundStatus = new Map<string, boolean>();
 /**
  * Process a refund for a charge.
  *
- * BUG: Time-of-check to time-of-use (TOCTOU) race condition.
- * The check for "already refunded" and the "mark as refunded" are
- * not atomic. Two concurrent requests can both pass the check.
+ * Marks the charge as refunded atomically (before any async gap)
+ * to prevent concurrent requests from issuing double refunds.
  */
 export async function processRefund(
   chargeId: string,
@@ -38,18 +32,18 @@ export async function processRefund(
     throw new PaymentError("Refund amount must be positive");
   }
 
-  // BUG: Race condition — check is not atomic with the update below
+  // Check if charge has already been refunded or is being processed
   const alreadyRefunded = chargeRefundStatus.get(chargeId);
   if (alreadyRefunded) {
     throw new PaymentError(`Charge ${chargeId} has already been refunded`);
   }
 
-  // Simulate processing delay (this is where the race window opens)
-  await new Promise((resolve) => setTimeout(resolve, 50));
-
-  // BUG: Another request could have refunded while we were waiting
-  // This should re-check, but doesn't
+  // Mark as refunded immediately before the async gap to prevent
+  // concurrent requests from passing the check above
   chargeRefundStatus.set(chargeId, true);
+
+  // Simulate processing delay
+  await new Promise((resolve) => setTimeout(resolve, 50));
 
   const refund: RefundRecord = {
     refundId: `re_${uuidv4().slice(0, 12)}`,
