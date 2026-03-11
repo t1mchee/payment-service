@@ -40,21 +40,22 @@ export async function processRefund(
     throw new PaymentError("Refund amount must be positive");
   }
 
-  // Wait for any in-flight refund for this charge to complete
-  const existingLock = chargeLocks.get(chargeId);
-  if (existingLock) {
-    await existingLock;
-  }
+  // Chain onto any existing lock for this charge so requests queue up.
+  // Each caller stores its own lock promise BEFORE awaiting, ensuring
+  // subsequent callers chain onto it (not the same previous lock).
+  const previousLock = chargeLocks.get(chargeId) ?? Promise.resolve();
 
-  // Create a lock for this charge and store it
   let releaseLock: () => void;
-  const lockPromise = new Promise<void>((resolve) => {
+  const currentLock = new Promise<void>((resolve) => {
     releaseLock = resolve;
   });
-  chargeLocks.set(chargeId, lockPromise);
+  chargeLocks.set(chargeId, currentLock);
+
+  // Wait for the previous operation to finish
+  await previousLock;
 
   try {
-    // Check is now safe — serialized by the lock
+    // Check is now safe — serialized by the lock chain
     const alreadyRefunded = chargeRefundStatus.get(chargeId);
     if (alreadyRefunded) {
       throw new PaymentError(`Charge ${chargeId} has already been refunded`);
@@ -78,7 +79,10 @@ export async function processRefund(
   } finally {
     // Release the lock so the next queued request can proceed
     releaseLock!();
-    chargeLocks.delete(chargeId);
+    // Only clean up if we are still the latest in the chain
+    if (chargeLocks.get(chargeId) === currentLock) {
+      chargeLocks.delete(chargeId);
+    }
   }
 }
 
